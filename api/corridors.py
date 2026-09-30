@@ -32,6 +32,21 @@ def load():
     )
 
 
+def _clean(obj):
+    """Replace non-finite floats with None.
+
+    Python writes NaN by default, but NaN is not valid JSON and the browser's
+    JSON.parse() rejects the entire body. A missing measurement is None, which
+    the frontend already renders as "n/a".
+    """
+    if isinstance(obj, float):
+        return obj if obj == obj and obj not in (float("inf"), float("-inf")) else None
+    if isinstance(obj, dict):
+        return {k: _clean(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean(v) for v in obj]
+    return obj
+
 class handler(BaseHTTPRequestHandler):
     def _send(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -52,7 +67,7 @@ class handler(BaseHTTPRequestHandler):
             self._send({"detail": "not found"}, 404)
             return
         try:
-            self._send(load()["corridors"])
+            self._send(_clean(load()["corridors"]))
         except FileNotFoundError as e:
             self._send({"detail": str(e)}, 500)
         except Exception as e:  # never return an empty 500

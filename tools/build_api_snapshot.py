@@ -48,6 +48,24 @@ def key_of(origin: str, destination: str, vessel_class: str) -> str:
     return f"{origin}|{destination}|{vessel_class}"
 
 
+def sanitize(obj):
+    """Replace non-finite floats with None.
+
+    Python's json module writes NaN and Infinity by default, but those are not
+    valid JSON and JSON.parse() in the browser rejects the whole body. Two ports
+    have no berth data, which made berths_total and berth_occupancy NaN, and that
+    silently broke every response the site fetches. A missing measurement is None,
+    which is what null means and what the frontend already knows how to render.
+    """
+    if isinstance(obj, float):
+        return obj if obj == obj and obj not in (float("inf"), float("-inf")) else None
+    if isinstance(obj, dict):
+        return {k: sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize(v) for v in obj]
+    return obj
+
+
 def main() -> int:
     print("Building API snapshot from the live models...\n")
 
@@ -83,16 +101,19 @@ def main() -> int:
             cargo_volume_mt=CARGO_TONNES,
         )
         route = query_route(req)
-        snapshot["route"][k] = route
+        snapshot["route"][k] = sanitize(route)
 
         series = corridor_series(origin, destination, vc, max_weeks=20)
-        snapshot["series"][k] = series
+        snapshot["series"][k] = sanitize(series)
 
         action = (route.get("risk_mitigation") or {}).get("action", "?")
         print("    %-34s %-9s  %s" % (cid, vc, action))
 
     out = ROOT.parent / "api_data.json"
-    payload = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+    # allow_nan=False makes a leftover NaN a hard error here rather than a broken
+    # response in the browser.
+    payload = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"),
+                         allow_nan=False)
     out.write_text(payload, encoding="utf-8")
 
     size_kb = len(payload.encode("utf-8")) / 1024
