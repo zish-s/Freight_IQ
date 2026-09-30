@@ -1,11 +1,30 @@
-"""GET /api/model-report - served from the recorded model report."""
+"""GET /api/model-report - the recorded walk-forward validation results.
+
+Self-contained: see the note in api/corridors.py about Vercel bundling.
+"""
 from __future__ import annotations
 
 import json
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from urllib.parse import urlparse
 
-from _data import CORS, load
+_DATA = None
+
+
+def load():
+    global _DATA
+    if _DATA is not None:
+        return _DATA
+    here = Path(__file__).resolve()
+    for base in (here.parent, here.parent.parent, Path.cwd(), Path.cwd() / "api"):
+        for name in (base / "api_data.json", base.parent / "api_data.json"):
+            if name.is_file():
+                _DATA = json.loads(name.read_text(encoding="utf-8"))
+                return _DATA
+    raise FileNotFoundError(
+        "api_data.json not found. Run: python tools/build_api_snapshot.py"
+    )
 
 
 class handler(BaseHTTPRequestHandler):
@@ -14,8 +33,9 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        for k, v in CORS.items():
-            self.send_header(k, v)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(body)
 
@@ -30,6 +50,8 @@ class handler(BaseHTTPRequestHandler):
             self._send(load()["model_report"])
         except FileNotFoundError as e:
             self._send({"detail": str(e)}, 500)
+        except Exception as e:
+            self._send({"detail": f"{type(e).__name__}: {e}"}, 500)
 
     def log_message(self, *args):
         pass

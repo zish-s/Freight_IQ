@@ -1,0 +1,18 @@
+Make each serverless function self-contained
+
+The deployed functions returned an empty 500. Vercel bundles and imports each
+file under api/ as an independent function, so the shared api/_data.py module
+they imported was not present in the bundle.
+
+The loader is now inlined into all four functions and api/_data.py is deleted.
+Nothing is imported from the rest of the project, so there is nothing for the
+bundler to fail to trace. Each function also returns a JSON error body instead
+of an empty 500 if anything else goes wrong, so a future fault is diagnosable
+from the browser rather than silent.
+
+Verified by copying each function on its own into an empty directory with only
+api_data.json, serving it over real HTTP and hitting it with a real request.
+That is a Vercel cold start, and a cross-file dependency cannot survive it. All
+four pass: 11 corridors, deployed model xgb, 20 weekly points, rate 25.22.
+
+No frontend change.

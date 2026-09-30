@@ -1,17 +1,52 @@
 """POST /api/query/route - the full decision pack for one corridor.
 
-Returns the response the real FastAPI backend produced for that corridor, as
-recorded by tools/build_api_snapshot.py. The website posts a fixed shape
-(origin, destination, vessel_class, cargo type and tonnage); the corridor is
-looked up by the first three.
+Self-contained: see the note in api/corridors.py about Vercel bundling.
+
+The website posts a fixed shape (origin, destination, vessel_class, cargo type
+and tonnage). The corridor is looked up by the first three and the recorded
+response for it is returned verbatim.
 """
 from __future__ import annotations
 
 import json
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from urllib.parse import urlparse
 
-from _data import CORS, key, load, unavailable
+_DATA = None
+
+
+def load():
+    global _DATA
+    if _DATA is not None:
+        return _DATA
+    here = Path(__file__).resolve()
+    for base in (here.parent, here.parent.parent, here.parent.parent.parent,
+                 Path.cwd(), Path.cwd() / "api"):
+        for name in (base / "api_data.json", base.parent / "api_data.json"):
+            if name.is_file():
+                _DATA = json.loads(name.read_text(encoding="utf-8"))
+                return _DATA
+    raise FileNotFoundError(
+        "api_data.json not found. Run: python tools/build_api_snapshot.py"
+    )
+
+
+def unavailable(reason):
+    """The same shape the backend returns when a corridor has no history, so the
+    website keeps showing its honest message instead of an error."""
+    return {
+        "available": False,
+        "reason": reason,
+        "freight_forecast": {"available": False, "reason": reason},
+        "congestion_model": {"available": False, "reason": reason},
+        "market_timing": {"available": False, "reason": reason},
+        "contract_comparison": {"available": False, "reason": reason},
+        "vessel_optimizer": {"available": False, "reason": reason},
+        "idle_analysis": {"available": False, "reason": reason},
+        "risk_mitigation": {"available": False, "reason": reason},
+        "explanation": {"available": False, "reason": reason},
+    }
 
 
 class handler(BaseHTTPRequestHandler):
@@ -20,8 +55,9 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        for k, v in CORS.items():
-            self.send_header(k, v)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(body)
 
@@ -32,12 +68,11 @@ class handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path.rstrip("/") != "/api/query/route":
             self._send({"detail": "not found"}, 404)
             return
-
         try:
             length = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
+        except (TypeError, ValueError):
             length = 0
-        raw = self.rfile.read(length) if length else b"{}"
+        raw = self.rfile.read(length) if length > 0 else b"{}"
         try:
             body = json.loads(raw.decode("utf-8") or "{}")
         except (ValueError, UnicodeDecodeError):
@@ -47,7 +82,6 @@ class handler(BaseHTTPRequestHandler):
         origin = str(body.get("origin", "")).strip()
         destination = str(body.get("destination", "")).strip()
         vessel_class = str(body.get("vessel_class", "")).strip()
-
         if not (origin and destination and vessel_class):
             self._send({"detail": "origin, destination and vessel_class are required"}, 400)
             return
@@ -57,8 +91,11 @@ class handler(BaseHTTPRequestHandler):
         except FileNotFoundError as e:
             self._send({"detail": str(e)}, 500)
             return
+        except Exception as e:
+            self._send({"detail": f"{type(e).__name__}: {e}"}, 500)
+            return
 
-        k = key(origin, destination, vessel_class)
+        k = f"{origin}|{destination}|{vessel_class}"
         found = data.get("route", {}).get(k)
         if found is None:
             self._send(unavailable(
